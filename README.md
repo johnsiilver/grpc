@@ -1,2 +1,2 @@
 # grpc
-GRPC related tooling
+Provides tooling around GRPC libraries.
