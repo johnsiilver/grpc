@@ -2,10 +2,12 @@
 Package server provides a convienence type for merging GRPC/REST/HTTP services on a single port.
 This avoids issues like needing CORS for JS/WASM clients to talk REST to your service because it
 runs on a different port. It handles issues such as:
-	- Routing for all three services on a single port
+	- Routing all three services on a single port
 	- Applying TLS for all services
 	- REST Gateway to GRPC setup
-	- Using not using TLS and needing HTTP with GRPC (a nightmare to figure out why it doesn't work)
+	- Can not use TLS while using HTTP and GRPC services (a nightmare to figure out why it doesn't work)
+	- Sane HTTP/REST default compression if client supported(gzip)
+	- GRPC gzip compression support (though this is based on the client request using gzip)
 	- Applying common HTTP handler wrappers to the Gateway and HTTP handlers (or individually)
 	- STAYING OUT OF THE WAY to allow you to customize your GRPC server, REST Gateway and HTTP.
 
@@ -94,15 +96,20 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/grpc-ecosystem/grpc-gateway/runtime"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 	"google.golang.org/grpc"
+
+	_ "google.golang.org/grpc/encoding/gzip"
 )
 
 // GRPC wraps a GRPC server and optionally a GRPC Gateway and HTTP server on a single port.
@@ -131,6 +138,11 @@ type GRPC struct {
 	http2Server *http2.Server
 
 	cancelFuncs []context.CancelFunc
+
+	// This section is used to deal with REST/HTTP compression/decompression.
+	restDecompressors map[string]Decompressor
+	httpCompressOrder []string
+	httpCompressors   map[string]Compressor
 
 	// mu locks our public methods.
 	mu sync.Mutex
@@ -164,9 +176,10 @@ type GWRegistrationFunc func(ctx context.Context, mux *runtime.ServeMux, endpoin
 // this gateway with the GRPC server (see comments on GWRegistrationFunc type).  wrappers are
 // http.Handler(s) that you want to wrap the gateway (like authoriztion or acl handlers). If
 // you want to wrap both the gateway and an HTTP server in the same handlers instead use the
-// WrapHandlers() option. dialOptions provides options that are needed to dial your GRPC service
-// from the gateway.  You may need to provide dialOptions like grpc.WithInsecure() if you are
-// using the WithInsecure() option above.
+// WrapHandlers() option. Note: handlers that do response compression or decompression should
+// be added with the HTTPCompress() and HTTPDecompress() options. dialOptions provides
+// options that are needed to dial your GRPC service from the gateway.  You may need to provide
+// dialOptions like grpc.WithInsecure() if you are using the WithInsecure() option above.
 func Gateway(mux *runtime.ServeMux, fn GWRegistrationFunc, wrappers []HTTPWrapper, dialOptions []grpc.DialOption) Option {
 	return func(g *GRPC) {
 		if mux == nil {
@@ -188,9 +201,10 @@ func Gateway(mux *runtime.ServeMux, fn GWRegistrationFunc, wrappers []HTTPWrappe
 type HTTPWrapper func(next http.Handler) http.Handler
 
 // HTTP installs an http.ServeMux to handle all calls that do not have "application/grpc-gateway"
-// or "application/grpc" and are calling with HTTP2. wrappers provides http.Handler(s) that you
-// want to wrap mux in. If you want to install wrapper handlers on
-// both the REST gateway and this ServeMux, you should use WrapHandlers().
+// or "application/grpc". wrappers provides http.Handler(s) that you want to wrap the mux in.
+// If you want to install wrapper handlers on both the REST gateway and this ServeMux, you should
+// use WrapHandlers(). Note: handlers that do response compression should be added with
+// the HTTPCompress() option.
 func HTTP(mux *http.ServeMux, wrappers []HTTPWrapper) Option {
 	return func(g *GRPC) {
 		g.httpMux = mux
@@ -198,7 +212,9 @@ func HTTP(mux *http.ServeMux, wrappers []HTTPWrapper) Option {
 	}
 }
 
-// WrapHandlers wraps the Gateway and the the handler passed to HTTP with the handlers passed here.
+// WrapHandlers wraps both the muxer passed with Gateway() and the the muxer passed to
+// HTTP() with the handlers passed here. Note: handlers that do response compression should be
+// added with the HTTPCompress() option.
 // To wrap GRPC itself, you must use an UnaryServerInterceptor (defined at https://godoc.org/google.golang.org/grpc#UnaryServerInterceptor).
 // You wrap it on the server using the UnaryInterceptor() ServerOption (https://godoc.org/google.golang.org/grpc#UnaryInterceptor)
 // when doing grpc.NewServer().
@@ -208,15 +224,76 @@ func WrapHandlers(handlers ...HTTPWrapper) Option {
 	}
 }
 
+// ResponseWriter is a composition of an io.WriteCloser and http.ResponseWriter. This is
+// used when trying to define a new response compression. See examples in the compress.go file.
+type ResponseWriter interface {
+	io.WriteCloser
+	http.ResponseWriter
+}
+
+// Compressor provides a function that composes an io.WriteCloser representing a compressor
+// and the http.ResponseWriter into our local ResponseWriter that implements http.ResponseWriter
+// with an additional Close() method for closing the compressor writes.
+type Compressor func(w http.ResponseWriter) ResponseWriter
+
+// Decompressor takes an io.Reader and either compresses the content or
+// decompresses the content to the returned io.ReadCloser.
+type Decompressor func(r io.Reader) io.Reader
+
+// HTTPDecompress decompresses requests coming from the clients for REST matching on the client
+// request's Encoding-Type. This puts a http.Handler before all other handlers provided to do the
+// decompression. "gzip" and "deflate" are automatically provided.
+func HTTPDecompress(encodingType string, decompressor Decompressor) Option {
+	return func(g *GRPC) {
+		g.restDecompressors[strings.ToLower(encodingType)] = decompressor
+	}
+}
+
+// HTTPCompress compresses responses to HTTP clients if the client sent an Accept-Encoding for the
+// type. Order of preference for the compress method will be: 1) The same as encoding on the request
+// if provided, 2) The order they were added with this option.
+func HTTPCompress(encodingType string, compressor Compressor) Option {
+	return func(g *GRPC) {
+		g.httpCompressors[strings.ToLower(encodingType)] = compressor
+		g.httpCompressOrder = append(g.httpCompressOrder, strings.ToLower(encodingType))
+	}
+}
+
+const (
+	gzipEnc    = "gzip"
+	deflateEnc = "deflate"
+)
+
 // New is the constructor for GRPC. pb.Register<Name>Service() must have been called on the serv argument.
 func New(address string, serv *grpc.Server, options ...Option) (*GRPC, error) {
 	g := &GRPC{
-		endpoint: address,
-		serv:     serv,
+		endpoint:          address,
+		serv:              serv,
+		restDecompressors: map[string]Decompressor{},
+		httpCompressors:   map[string]Compressor{},
 	}
 
 	for _, option := range options {
 		option(g)
+	}
+
+	// If the user didn't provide a gzip encoder, we will provide ours.
+	if _, ok := g.httpCompressors[gzipEnc]; !ok {
+		g.httpCompressors[gzipEnc] = newGzipResponseWriter
+		g.httpCompressOrder = append(g.httpCompressOrder, gzipEnc)
+	}
+	// If the user didn't provide a dflate encoder, we will provide ours.
+	if _, ok := g.httpCompressors[deflateEnc]; ok {
+		g.httpCompressors[deflateEnc] = newDeflateResponseWriter
+		g.httpCompressOrder = append(g.httpCompressOrder, deflateEnc)
+	}
+	// If the user didn't provide a gzip decoder, we will provide ours.
+	if _, ok := g.restDecompressors[gzipEnc]; !ok {
+		g.restDecompressors[gzipEnc] = gzipDecompress
+	}
+	// If the user didn't provide a defalte decoder, we will provide ours.
+	if _, ok := g.restDecompressors[deflateEnc]; !ok {
+		g.restDecompressors[deflateEnc] = defalteDecompress
 	}
 
 	if len(g.certs) > 0 && g.insecure {
@@ -378,6 +455,7 @@ func (g *GRPC) startH2C() error {
 	return nil
 }
 
+// handler handles routing between GRPC, REST and HTTP services.
 func (g *GRPC) handler() http.Handler {
 	return http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
@@ -394,14 +472,81 @@ func (g *GRPC) handler() http.Handler {
 					http.Error(w, "application/grpc-gateway received, but server is not setup for REST", http.StatusBadRequest)
 					return
 				}
-				g.gatewayHandler.ServeHTTP(w, r)
+				g.httpRESTHandler(g.gatewayHandler).ServeHTTP(w, r)
 				return
 			default:
+				// Special case where they are looking for the REST swagger docs.
+				if strings.HasPrefix(r.URL.Path, "/swagger-ui/") {
+					g.httpRESTHandler(g.gatewayHandler).ServeHTTP(w, r)
+					return
+				}
+
 				if g.httpMux == nil {
 					http.Error(w, "Not Found", http.StatusNotFound)
 					return
 				}
-				g.httpMux.ServeHTTP(w, r)
+				g.httpRESTHandler(g.httpMux).ServeHTTP(w, r)
+			}
+		},
+	)
+}
+
+// compressDecompressHandler is our parent handler that calls all our compress/decompress
+// handlers for HTTP and REST services.
+func (g *GRPC) httpRESTHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			handler := g.decompressHandler(
+				g.compressHandler(
+					next,
+				),
+			)
+			handler.ServeHTTP(w, r)
+		},
+	)
+}
+
+// compressHandler is a handler that compresses responses to the caller. This will attempt to
+// use the same compression method that the caller used on their request, failing that it will
+// check each compression method we support against the ones the client accepts until the first
+// match. This should wrap all HTTP and REST calls (but NOT GRPC).
+func (g *GRPC) compressHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if contentEncoding := r.Header.Get("Content-Encoding"); contentEncoding != "" {
+				if compressorFn, ok := g.httpCompressors[contentEncoding]; ok {
+					w.Header().Add("Content-Encoding", contentEncoding)
+					rw := compressorFn(w)
+					defer rw.Close()
+					next.ServeHTTP(rw, r)
+					return
+				}
+			}
+			for _, acceptEncoding := range r.Header.Values("Accept-Encoding") {
+				if compressorFn, ok := g.httpCompressors[acceptEncoding]; ok {
+					w.Header().Add("Content-Encoding", acceptEncoding)
+					rw := compressorFn(w)
+					defer rw.Close()
+					next.ServeHTTP(rw, r)
+					return
+				}
+			}
+		},
+	)
+}
+
+// decompressHandler tries to decompress
+func (g *GRPC) decompressHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if contentEncoding := r.Header.Get("Content-Encoding"); contentEncoding != "" {
+				decompressorFn, ok := g.restDecompressors[contentEncoding]
+				if !ok {
+					http.Error(w, fmt.Sprintf("request content-encoding=%s, server does not support this", contentEncoding), http.StatusPreconditionFailed)
+					return
+				}
+				r.Body = ioutil.NopCloser(decompressorFn(r.Body))
+				next.ServeHTTP(w, r)
 			}
 		},
 	)

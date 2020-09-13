@@ -1,4 +1,31 @@
-// Package client provides a REST client for communicating with a GRPC gateway.
+/*
+Package client provides a REST client for communicating with a GRPC gateway. This client is
+specifically made to work with github.com/johnsiilver/grpc/server .
+
+If not using with our server, you need to use:
+	- Use the CustomHeaders() in order to remove "Content-Type": "application/grpc-gateway"
+	- Pass CompressRequests(nil) to remove gzip compression, unless your server supports it
+
+Usage example:
+	u, err := url.Parse("http://208.244.233.1:8080")
+	if err != nil {
+		// Do something
+	}
+
+	resty := New(u)
+
+	resp := &pb.YourResp{}
+
+	err = resty.Call(
+		context.Background(),
+		"/v1/snippetsService/save", // This is the URL of the REST call, defined in your proto file
+		&pb.YourReq{...}, // The protocol buffer you are sending
+		resp, // The protocol buffer message you should receive
+	)
+	if err != nil {
+		// Do something
+	}
+*/
 package client
 
 import (
@@ -36,17 +63,19 @@ type GRPC struct {
 	client *http.Client
 	header http.Header
 
-	compressHandler CompressHandler
+	compressHandler Compressor
 
-	decompressHandlers map[string]DecompressHandler
+	decompressHandlers map[string]Decompressor
+	acceptEncoding     []string
 }
 
-// CompressHandler creates an *http.Request that compresses the Body content.
-type CompressHandler func(ctx context.Context, path string, headers http.Header, r io.Reader) (*http.Request, error)
+// Compressor creates an *http.Request that compresses the Body content. The path is the
+// URL path, headers are the request headers and r is the io.Reader that we will write the
+// request body with.
+type Compressor func(ctx context.Context, path string, headers http.Header, r io.Reader) (*http.Request, error)
 
-// DecompressHandler takes an io.Reader and either compresses the content or
-// decompresses the content to the returned io.ReadCloser.
-type DecompressHandler func(r io.Reader) io.Reader
+// Decompressor takes an io.Reader returns an io.Reader that decompresses the content.
+type Decompressor func(r io.Reader) io.Reader
 
 // Option provides an optional argument to the New() constructor.
 type Option func(g *GRPC)
@@ -72,18 +101,23 @@ func CustomHeaders(header http.Header) Option {
 // CompressRequests will compress all http.Request.Body content with the Compression handler provided
 // here. The REST service will need need to be able to understand the Content-Encoding
 // and decompress it before grpc-gateway receives the message.
-func CompressRequests(h CompressHandler) Option {
+func CompressRequests(h Compressor) Option {
 	return func(g *GRPC) {
 		g.compressHandler = h
 	}
 }
 
 // DecompressResponse allows decompression of responses sent from the server with the "acceptEncoding" using
-// the provided DecompressHandler. By default, we already support gzip("gzip") and deflate("deflate").
-// You may provide this option multiple times for multiple acceptEncodings.
-func DecompressResponse(acceptEncoding string, h DecompressHandler) Option {
+// the provided Decompressor. By default, we already support gzip("gzip") and deflate("deflate").
+// You may provide this option multiple times for multiple acceptEncodings. Because servers tend to
+// decompress based on order in the Accept-Encoding array, the order is important. The first use of
+// this will be the first Accept-Encoding in the array (gzip, defalte will always be at the end).
+// If using our server, it will choose to encode the response in whatever the request is encoded in first
+// and then in its own preference order.
+func DecompressResponse(acceptEncoding string, h Decompressor) Option {
 	return func(g *GRPC) {
 		g.decompressHandlers[acceptEncoding] = h
+		g.acceptEncoding = append(g.acceptEncoding, acceptEncoding)
 	}
 }
 
@@ -91,10 +125,11 @@ func DecompressResponse(acceptEncoding string, h DecompressHandler) Option {
 // http/https and ends with :port (https://192.168.1.1:8082) representing the grpc-gateway endpoint.
 func New(endpoint *url.URL, options ...Option) *GRPC {
 	g := &GRPC{
-		base:   endpoint,
-		client: &http.Client{},
-		header: DefaultHeaders(),
-		decompressHandlers: map[string]DecompressHandler{
+		base:            endpoint,
+		client:          &http.Client{},
+		header:          DefaultHeaders(),
+		compressHandler: GzipCompress,
+		decompressHandlers: map[string]Decompressor{
 			"gzip":    gzipDecompress,
 			"deflate": defalteDecompress,
 		},
@@ -104,9 +139,13 @@ func New(endpoint *url.URL, options ...Option) *GRPC {
 		o(g)
 	}
 
-	for enc := range g.decompressHandlers {
+	for _, enc := range g.acceptEncoding {
 		g.header.Add("Accept-Encoding", enc)
 	}
+	// These are here so that if they provided custom decoding that we are giving the server
+	// preference for them over gzip/deflate.
+	g.header.Add("Accept-Encoding", "gzip")
+	g.header.Add("Accept-Encoding", "deflate")
 
 	return g
 }
@@ -192,7 +231,7 @@ func (g *GRPC) handleDecompress(resp *http.Response) (io.Reader, error) {
 	return handler(resp.Body), nil
 }
 
-// GzipCompress implements CompressHandler to allow compressing requests to the server.
+// GzipCompress implements Compressor to allow compressing requests to the server.
 func GzipCompress(ctx context.Context, path string, headers http.Header, r io.Reader) (*http.Request, error) {
 	pipeOut, pipeIn := io.Pipe()
 	w := gzip.NewWriter(pipeIn)
@@ -219,10 +258,11 @@ func GzipCompress(ctx context.Context, path string, headers http.Header, r io.Re
 		req.Header = headers
 	}
 	req.Header.Add("Content-Encoding", "gzip")
+
 	return req, nil
 }
 
-// gzipDecompress implements DecompressHandler for decompressing gzip content.
+// gzipDecompress implements Decompressor for decompressing gzip content.
 func gzipDecompress(r io.Reader) io.Reader {
 	gzipReader, _ := gzip.NewReader(r)
 
@@ -243,7 +283,7 @@ func gzipDecompress(r io.Reader) io.Reader {
 	return pipeOut
 }
 
-// defalteDecompress implements DecompressHandler for decompressing deflate content.
+// defalteDecompress implements Decompressor for decompressing deflate content.
 func defalteDecompress(r io.Reader) io.Reader {
 	flateReader := flate.NewReader(r)
 
