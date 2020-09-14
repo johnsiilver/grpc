@@ -10,28 +10,13 @@ There are two main packages:
 
 ## Why I Did This
 
-Short version: 
-
-I hate developing web apps. Its by far the worst application framework ever cobbled together, like some frankenstein monster.
-
-I wanted to use WASM, but that was only changing this nightmare from:
-
-```Javascript+HTML+CSS+Go+Go Templates+Some Framework```
-
-to
-
-```Javascript+HTML+CSS+Go+Go Templates+WASM+Possibly Some Framework```
-
-While there is more Go (an improvement), it didn't eliminate the others.
-
-So I developed/developing a package that allows me to write pure Go + CSS, nothing else. And a goal is to never use syscall/js (syscall/js is my assembly code and I'm trying to build my C language for the web). 
+I developed/developing a package that allows me to write pure Go + CSS, nothing else. And a goal is to never use syscall/js (syscall/js is my assembly code and I'm trying to build my C language for the web). 
 
 I wanted to use GRPC from WASM, but the GRPC client won't run in WASM. So I need to use REST. If you use REST and serve WASM on different ports, you now have to deal with CORS. 
 
 I don't want to deal with CORS.
 
-So this fixes that and provides some sane defaults around HTTP/REST (like at least gzip compression). GRPC/net.HTTP/GRPC-Gateway out of the box don't provide sane defaults (I'm not saying
-they should).
+So this fixes that and provides some sane defaults around HTTP/REST (like at least gzip compression) and an easiser way to handle various wrapping you will want to do to create a company/infrastructure core GRPC package.
 
 ## Packages
 
@@ -61,39 +46,34 @@ Provides a wrapper that provides:
 - Applying gzip compression of GRPC responses by default unless otherwise configured
 - STAYING OUT OF THE WAY to allow you to customize your GRPC server, REST Gateway and HTTP
 
-### server/defaults
-
-Provides some default options you should put on your server before using our server.New() call. Like the ability to decompress gzip/deflate.
-
 ## Potential FAQs
 
 ### Can I contribute?
 
-The short answer is yes. Unless it is a bug fix, please send an email on what you propose. The goal is simplicity and some use cases are better handled with forks.
+Yes, with caveats. Unless it is a bug fix, please send an email on what you propose before writing code. The goal here is simplicity and some use cases are better handled with by just forking the code for your own purposes.
 
-### The release is v0.1.x, can we use it?
+### The release is v0.x.x, can we use it?
 
 While we are still doing v0.x releases, it is possible that I will break the API. So you should tag to specific releases and not rely on the master branch.
 
 ### Why Gzip defaults instead of X
 
-While I'm not sure which compression tech X will be, the answer will always be the same. gzip is just universally supported.
+While I'm not sure which compression tech X will be, the answer would be the same. gzip is just universally supported.
 
 I'm a fan of brotil myself, but:
 
 - brotil requires HTTPS
 - Many things don't support it
 - The Go version requires CGO, which means NAY!!!!
-- Yeah I know dsnet has one, but it ain't production ready
+- Yeah I know dsnet has one, but its not production ready
 
 ### In the server you provide default gzip/deflate compressors/decompressors, can I override them?
 
-Yes, if you provide a faster compress/decompressor for encoding types "gzip" or "defalte" it will
-override the ones provided.
+Yes, if you provide a faster compress/decompressor for encoding types "gzip" or "deflate" it will override the ones provided.
 
 ### You haven't updated this project in a while, still safe?
 
 Unless I get bug requests, feature requests or I need something, I leave good code alone.
 
-I try to respond to issues within a reasonable amout of time (a week), but remember that this is free code and I already have a job, go on vacations (when there isn't COVID), etc...
+I try to respond to issues within a reasonable amount of time (a week), but remember that this is free code and I already have a job, go on vacations (when there isn't COVID), etc...
 
