@@ -10,13 +10,13 @@ There are two main packages:
 
 ## Why I Did This
 
-I developed/developing a package that allows me to write pure Go + CSS, nothing else. And a goal is to never use syscall/js (syscall/js is my assembly code and I'm trying to build my C language for the web). 
+I developed/developing a package that allows me to write pure Go + CSS, nothing else.
 
-I wanted to use GRPC from WASM, but the GRPC client won't run in WASM. So I need to use REST. If you use REST and serve WASM on different ports, you now have to deal with CORS. 
+For that project, I wanted to use GRPC from WASM, but the GRPC client won't run in WASM. This whole Envoy provy for that purpose(https://github.com/grpc/grpc-web) only makes sense to me when you have a team maintaing proxies for a company. The simplest solution is the GRPC Gateway REST endpoint.  
 
-I don't want to deal with CORS.
+However, if you use REST and serve WASM on different ports, you now have to deal with CORS. I don't want to deal with CORS (simplicity makes for reliable services and is surprisingly hard to do).
 
-So this fixes that and provides some sane defaults around HTTP/REST (like at least gzip compression) and an easiser way to handle various wrapping you will want to do to create a company/infrastructure core GRPC package.
+So this solves those problems and provides some sane defaults around things like having at least gzip compression and easy ways to do http.Handler wrapping for middleware.
 
 ## Packages
 
