@@ -146,7 +146,7 @@ if err := united.Start(); err != nil {
 ```
 The above will provide gzip or deflate HTTP/REST responses by default if the client supports it.
 
-It will also gzip compress responses in GRPC, if the client sends with GRPC enabled.
+It will also gzip compress responses in GRPC, if the client sends with gzip compression enabled.
 
 ## Potential FAQs
 
