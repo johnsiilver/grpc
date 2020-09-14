@@ -1,4 +1,4 @@
-![grpc logo](https://grpc.io/img/logos/grpc-logo.png)
+![grpc logo](https://raw.githubusercontent.com/cncf/artwork/master/projects/grpc/horizontal/color/grpc-horizontal-color.png)
 ---
 [![GoDev](https://img.shields.io/static/v1?label=godev&message=reference&color=00add8)](https://pkg.go.dev/github.com/johnsiilver/grpc/server)
 
