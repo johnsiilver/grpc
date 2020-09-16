@@ -15,9 +15,10 @@ This package is meant to be used internally in a common GRPC platform package fo
 parent package can automatically setup health handlers, have options for ACL processing,
 automatically tie into monitoring, etc...
 
-Important Note:
+Important Notes:
 	- Traffic going to REST MUST have Content-Type set to "application/grpc-gateway".
 	- The gateway/client located in this Repo automatically sets this.
+	- We do not compress content being served with file types (as discovered by file extensions) that are already compressed
 
 Usage example:
 	// Basic GRPC server setup.
@@ -101,6 +102,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"path"
 	"strings"
 	"sync"
 
@@ -282,7 +284,7 @@ func New(address string, serv *grpc.Server, options ...Option) (*GRPC, error) {
 		g.httpCompressors[gzipEnc] = newGzipResponseWriter
 		g.httpCompressOrder = append(g.httpCompressOrder, gzipEnc)
 	}
-	// If the user didn't provide a dflate encoder, we will provide ours.
+	// If the user didn't provide a deflate encoder, we will provide ours.
 	if _, ok := g.httpCompressors[deflateEnc]; ok {
 		g.httpCompressors[deflateEnc] = newDeflateResponseWriter
 		g.httpCompressOrder = append(g.httpCompressOrder, deflateEnc)
@@ -513,6 +515,12 @@ func (g *GRPC) httpRESTHandler(next http.Handler) http.Handler {
 func (g *GRPC) compressHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
+			// Certainly types of return content, indicated by file extentions, should not get gzip compression as
+			// they are already compressed.
+			if doNotCompress[strings.ToLower(path.Ext(r.URL.Path))] {
+				next.ServeHTTP(w, r)
+				return
+			}
 			if contentEncoding := r.Header.Get("Content-Encoding"); contentEncoding != "" {
 				if compressorFn, ok := g.httpCompressors[contentEncoding]; ok {
 					w.Header().Add("Content-Encoding", contentEncoding)

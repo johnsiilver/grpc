@@ -68,6 +68,7 @@ Provides a wrapper that:
 - Applying common HTTP handler wrappers to the Gateway and HTTP handlers
 - Applying gzip compression of HTTP/REST responses by default if client supports it, unless otherwise configured
 - Applying gzip compression of GRPC responses by default, unless otherwise configured
+- Does not apply compression to common compressed file types that are already compressed (see compress.go for a list)
 - STAYING OUT OF THE WAY to allow you to customize your GRPC server, REST Gateway and HTTP
 
 Usage Example:
