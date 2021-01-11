@@ -555,7 +555,7 @@ func (g *GRPC) decompressHandler(next http.Handler) http.Handler {
 				}
 				reader, err := decompressorFn(r.Body)
 				if err != nil {
-					http.Error(w, fmt.Sprintf("problem with decompressor(%s): %w", contentEncoding, err), http.StatusBadRequest)
+					http.Error(w, fmt.Sprintf("problem with decompressor(%s): %s", contentEncoding, err), http.StatusBadRequest)
 					return
 				}
 				r.Body = ioutil.NopCloser(reader)

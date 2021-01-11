@@ -3,6 +3,7 @@ package server
 import (
 	"compress/flate"
 	"compress/gzip"
+	"fmt"
 	"io"
 )
 
@@ -31,7 +32,7 @@ func gzipDecompress(r io.Reader) (io.Reader, error) {
 }
 
 // defalteDecompress implements Decompressor for decompressing deflate content.
-func defalteDecompress(r io.Reader) io.Reader {
+func defalteDecompress(r io.Reader) (io.Reader, error) {
 	flateReader := flate.NewReader(r)
 
 	pipeOut, pipeIn := io.Pipe()
@@ -48,5 +49,5 @@ func defalteDecompress(r io.Reader) io.Reader {
 		}
 		pipeIn.Close()
 	}()
-	return pipeOut
+	return pipeOut, nil
 }
