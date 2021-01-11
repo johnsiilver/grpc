@@ -240,7 +240,7 @@ type Compressor func(w http.ResponseWriter) ResponseWriter
 
 // Decompressor takes an io.Reader and either compresses the content or
 // decompresses the content to the returned io.ReadCloser.
-type Decompressor func(r io.Reader) io.Reader
+type Decompressor func(r io.Reader) (io.Reader, error)
 
 // HTTPDecompress decompresses requests coming from the clients for REST matching on the client
 // request's Encoding-Type. This puts a http.Handler before all other handlers provided to do the
@@ -553,7 +553,12 @@ func (g *GRPC) decompressHandler(next http.Handler) http.Handler {
 					http.Error(w, fmt.Sprintf("request content-encoding=%s, server does not support this", contentEncoding), http.StatusPreconditionFailed)
 					return
 				}
-				r.Body = ioutil.NopCloser(decompressorFn(r.Body))
+				reader, err := decompressorFn(r.Body)
+				if err != nil {
+					http.Error(w, fmt.Sprintf("problem with decompressor(%s): %w", contentEncoding, err), http.StatusBadRequest)
+					return
+				}
+				r.Body = ioutil.NopCloser(reader)
 				next.ServeHTTP(w, r)
 			}
 		},
