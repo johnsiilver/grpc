@@ -7,8 +7,11 @@ import (
 )
 
 // gzipDecompress implements Decompressor for decompressing gzip content.
-func gzipDecompress(r io.Reader) io.Reader {
-	gzipReader, _ := gzip.NewReader(r)
+func gzipDecompress(r io.Reader) (io.Reader, error) {
+	gzipReader, err := gzip.NewReader(r)
+	if err != nil {
+		return nil, fmt.Errorf("problem creating a new gzip reader from io.Reader: %w", err)
+	}
 
 	pipeOut, pipeIn := io.Pipe()
 	go func() {
@@ -24,7 +27,7 @@ func gzipDecompress(r io.Reader) io.Reader {
 		}
 		pipeIn.Close()
 	}()
-	return pipeOut
+	return pipeOut, nil
 }
 
 // defalteDecompress implements Decompressor for decompressing deflate content.
