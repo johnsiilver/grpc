@@ -128,12 +128,11 @@ type GRPC struct {
 	gwWrappers []HTTPWrapper
 	gwDialOpts []grpc.DialOption
 
-	httpMux      *http.ServeMux
+	httpMux      http.Handler // starts as a *http.ServeMux, ends wrapped in handlers
 	httpWrappers []HTTPWrapper
 
 	allHTTPWrappers []HTTPWrapper
 
-	httpHandler    http.Handler
 	gatewayHandler http.Handler
 
 	httpServer  *http.Server
@@ -341,7 +340,7 @@ func (g *GRPC) wrapHTTP() {
 	for _, wrap := range g.allHTTPWrappers {
 		handler = wrap(handler)
 	}
-	g.httpHandler = handler
+	g.httpMux = handler
 	return
 }
 
@@ -487,7 +486,7 @@ func (g *GRPC) handler() http.Handler {
 					http.Error(w, "Not Found", http.StatusNotFound)
 					return
 				}
-				g.httpRESTHandler(g.httpMux).ServeHTTP(w, r)
+				g.httpMux.ServeHTTP(w, r)
 			}
 		},
 	)
@@ -496,7 +495,9 @@ func (g *GRPC) handler() http.Handler {
 // compressDecompressHandler is our parent handler that calls all our compress/decompress
 // handlers for HTTP and REST services.
 func (g *GRPC) httpRESTHandler(next http.Handler) http.Handler {
-	return http.HandlerFunc(
+	return http.HandlerFunc(next.ServeHTTP)
+	// TODO(jdoak): GOTTA FIX THIS!!!
+	/*
 		func(w http.ResponseWriter, r *http.Request) {
 			handler := g.decompressHandler(
 				g.compressHandler(
@@ -505,7 +506,8 @@ func (g *GRPC) httpRESTHandler(next http.Handler) http.Handler {
 			)
 			handler.ServeHTTP(w, r)
 		},
-	)
+	*/
+
 }
 
 // compressHandler is a handler that compresses responses to the caller. This will attempt to
