@@ -29,6 +29,7 @@ Usage example:
 package client
 
 import (
+	"log"
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
@@ -128,7 +129,6 @@ func New(endpoint *url.URL, options ...Option) *GRPC {
 		base:            endpoint,
 		client:          &http.Client{},
 		header:          DefaultHeaders(),
-		compressHandler: GzipCompress,
 		decompressHandlers: map[string]Decompressor{
 			"gzip":    gzipDecompress,
 			"deflate": defalteDecompress,
@@ -174,6 +174,7 @@ func (g *GRPC) Call(ctx context.Context, path string, args proto.Message, result
 			return fmt.Errorf("grpc.Call(): failed to create a request: %w", err)
 		}
 	} else {
+		log.Println("sending: ", string(b))
 		req, err = http.NewRequestWithContext(ctx, "POST", fullPath, bytes.NewBuffer(b))
 		if err != nil {
 			return fmt.Errorf("grpc.Call(): failed to create a request: %w", err)

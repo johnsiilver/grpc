@@ -106,7 +106,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 	"google.golang.org/grpc"
@@ -128,12 +128,11 @@ type GRPC struct {
 	gwWrappers []HTTPWrapper
 	gwDialOpts []grpc.DialOption
 
-	httpMux      *http.ServeMux
+	httpMux      http.Handler // starts as a *http.ServeMux, ends wrapped in handlers
 	httpWrappers []HTTPWrapper
 
 	allHTTPWrappers []HTTPWrapper
 
-	httpHandler    http.Handler
 	gatewayHandler http.Handler
 
 	httpServer  *http.Server
@@ -319,11 +318,14 @@ func (g *GRPC) wrapGateway() {
 
 	var handler http.Handler = g.gateway
 	for _, wrap := range g.gwWrappers {
+		panic("had wrapper")
 		handler = wrap(handler)
 	}
-	for _, wrap := range g.allHTTPWrappers {
-		handler = wrap(handler)
-	}
+	/*
+		for _, wrap := range g.allHTTPWrappers {
+			handler = wrap(handler)
+		}
+	*/
 	g.gatewayHandler = handler
 	return
 }
@@ -341,7 +343,7 @@ func (g *GRPC) wrapHTTP() {
 	for _, wrap := range g.allHTTPWrappers {
 		handler = wrap(handler)
 	}
-	g.httpHandler = handler
+	g.httpMux = handler
 	return
 }
 
@@ -469,12 +471,13 @@ func (g *GRPC) handler() http.Handler {
 				}
 				http.Error(w, "'application/grpc' content arrived, but HTTP protocol was not HTTP 2", http.StatusBadRequest)
 				return
-			case "application/grpc-gateway":
+			case "application/grpc-gateway", "application/jsonpb":
 				if g.gatewayHandler == nil {
 					http.Error(w, "application/grpc-gateway received, but server is not setup for REST", http.StatusBadRequest)
 					return
 				}
-				g.httpRESTHandler(g.gatewayHandler).ServeHTTP(w, r)
+				// g.httpRESTHandler(g.gatewayHandler).ServeHTTP(w, r)
+				g.gatewayHandler.ServeHTTP(w, r)
 				return
 			default:
 				// Special case where they are looking for the REST swagger docs.
@@ -487,7 +490,7 @@ func (g *GRPC) handler() http.Handler {
 					http.Error(w, "Not Found", http.StatusNotFound)
 					return
 				}
-				g.httpRESTHandler(g.httpMux).ServeHTTP(w, r)
+				g.httpMux.ServeHTTP(w, r)
 			}
 		},
 	)
@@ -496,7 +499,9 @@ func (g *GRPC) handler() http.Handler {
 // compressDecompressHandler is our parent handler that calls all our compress/decompress
 // handlers for HTTP and REST services.
 func (g *GRPC) httpRESTHandler(next http.Handler) http.Handler {
-	return http.HandlerFunc(
+	return http.HandlerFunc(next.ServeHTTP)
+	// TODO(jdoak): GOTTA FIX THIS!!!
+	/*
 		func(w http.ResponseWriter, r *http.Request) {
 			handler := g.decompressHandler(
 				g.compressHandler(
@@ -505,7 +510,8 @@ func (g *GRPC) httpRESTHandler(next http.Handler) http.Handler {
 			)
 			handler.ServeHTTP(w, r)
 		},
-	)
+	*/
+
 }
 
 // compressHandler is a handler that compresses responses to the caller. This will attempt to
